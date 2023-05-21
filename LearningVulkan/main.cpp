@@ -3,6 +3,9 @@
 
 #include <iostream>
 #include <vector>
+#include <functional>
+#include <optional>
+
 #include <stdexcept>
 #include <cstdlib>
 #include <cstring>
@@ -21,6 +24,55 @@ const std::vector<const char*> validationLayers = {
 #endif // NDEBUG
 
 
+struct QueueFamilyIndices 
+{
+  std::optional<uint32_t> graphicsFamily;
+
+  bool isComplete()
+  {
+    return graphicsFamily.has_value();
+  }
+};
+
+template <typename T>
+std::vector<T>  getEnumeratedData(std::function<void(uint32_t*, T*)> enumerationFunction)
+{
+  uint32_t layerCount;
+  enumerationFunction(&layerCount, nullptr);
+
+  std::vector<T> availableLayers(layerCount);
+  enumerationFunction(&layerCount, availableLayers.data());
+
+  return availableLayers;
+}
+
+bool checkValidationLayerSupport()
+{
+  auto availableLayers = getEnumeratedData<VkLayerProperties>(vkEnumerateInstanceLayerProperties);
+
+  for (const char* layerName : validationLayers)
+  {
+    bool layerFound = false;
+
+    for (const auto& layerProperties : availableLayers)
+    {
+      if (strcmp(layerName, layerProperties.layerName) == 0)
+      {
+        layerFound = true;
+        break;
+      }
+    }
+
+    if (!layerFound)
+    {
+      std::cout << layerName << " NOT FOUND\n";
+      return false;
+    }
+  }
+
+  return true;
+}
+
 class HelloTriangleApplication {
 private:
   GLFWwindow* window;
@@ -36,36 +88,76 @@ public:
   }
 
 private:
-  bool checkValidationLayerSupport()
+  QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device)
   {
-    uint32_t layerCount;
-    vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+    QueueFamilyIndices indices;
 
-    std::vector<VkLayerProperties> availableLayers(layerCount);
-    vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
 
-    for (const char* layerName : validationLayers)
+    std::cout << "FOUND " << queueFamilies.size() << " queue families" << std::endl;
+
+    int i = 0;
+    for (const auto& queueFamily : queueFamilies)
     {
-      bool layerFound = false;
-
-      for (const auto& layerProperties : availableLayers)
+      if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT)
       {
-        if (strcmp(layerName, layerProperties.layerName) == 0)
-        {
-          layerFound = true;
-          break;
-        }
+        indices.graphicsFamily = i;
+        std::cout << "CHECKING QUEUE FAMILY: " << queueFamily.queueFlags << std::endl;
       }
+      i++;
+    }
 
-      if (!layerFound)
+    return indices;
+  }
+
+  bool isDeviceSuitable(VkPhysicalDevice device)
+  {
+    VkPhysicalDeviceProperties deviceProps;
+    vkGetPhysicalDeviceProperties(device, &deviceProps);
+
+    VkPhysicalDeviceFeatures deviceFeatures;
+    vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
+
+    bool dedicatedAndGeom = (deviceProps.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
+      deviceFeatures.geometryShader);
+
+    QueueFamilyIndices indices = findQueueFamilies(device);
+
+    bool hasAllOps = indices.isComplete();
+
+    return dedicatedAndGeom && hasAllOps;
+  }
+
+  void pickPhysicalDevice()
+  {
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+
+    uint32_t deviceCount{};
+    vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+
+    if (deviceCount == 0)
+      throw std::runtime_error("faild to find GPUs with Vulkan support!");
+
+    std::vector<VkPhysicalDevice> devices(deviceCount);
+    vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+
+    for (const auto& device : devices)
+    {
+      if (isDeviceSuitable(device))
       {
-        std::cout << layerName << " NOT FOUND\n";
-        return false;
+        physicalDevice = device;
+        break;
       }
     }
 
-    return true;
+    if (physicalDevice == VK_NULL_HANDLE)
+      throw std::runtime_error("failed to find a suitable GPU!");
   }
+
+  
 
   void createInstace()
   {
@@ -139,6 +231,7 @@ private:
   void initVulkan() 
   {
     createInstace();
+    pickPhysicalDevice();
   }
 
   void mainLoop()
